@@ -1,0 +1,23 @@
+# This is a simple, secure, circular route.
+# Fill in the gas in the first station (moon);
+# On each stop, sell all goods (but fuel), and buy as much of the product to sell in the next stop.
+
+route:
+  - station: OE-PM-TR
+    buy:
+      FUEL: 35
+  - station: OE-PM
+    sell:
+      CONSUMER_GOODS: -1
+    buy:
+      DRONES: 266
+  - station: OE-UC-OB
+    sell:
+      DRONES: -1
+    buy:
+      CHEMICALS: 280
+  - station: OE-KO
+    sell:
+      CHEMICALS: -1
+    buy:
+      CONSUMER_GOODS: 265

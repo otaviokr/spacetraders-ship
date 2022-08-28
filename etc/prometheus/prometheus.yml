@@ -1,0 +1,32 @@
+# my global config
+global:
+  scrape_interval: 5m
+  evaluation_interval: 1m
+  # scrape_timeout is set to the global default (10s).
+
+  # # The labels to add to any time series or alerts when communicating with
+  # # external systems (federation, remote storage, Alertmanager).
+  # external_labels:
+  #   monitor: codelab
+  #   foo: bar
+
+# # Rule files specifies a list of globs. Rules and alerts are read from
+# # all matching files.
+# rule_files:
+#   - "first.rules"
+#   - "my/*.rules"
+
+scrape_configs:
+  - job_name: spacetrader-ship
+
+    honor_labels: true
+    # scrape_interval is defined by the configured global (15s).
+    # scrape_timeout is defined by the global default (10s).
+
+    # metrics_path defaults to '/metrics'
+    # scheme defaults to 'http'.
+
+    static_configs:
+      - targets: ["spacetrader-ship:9091"]
+        labels:
+          ship: space_truck
