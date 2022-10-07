@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -64,6 +65,27 @@ func TestNewShip(t *testing.T) {
 	}
 }
 
+func TestNewShipFailed(t *testing.T) {
+	errorMessage := "This is error"
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proxy := mocks.NewMockProxy(ctrl)
+
+	proxy.EXPECT().GetShipInfo().Return(nil, fmt.Errorf(errorMessage))
+	_, err := component.NewShipCustomProxy(
+		context.TODO(),
+		trace.NewNoopTracerProvider().Tracer(""),
+		proxy,
+		"irrelevant_id",
+		"irrelevant_token")
+	if err == nil {
+		t.Fatalf("\ngot no error, but expected error: %s", err.Error())
+	} else if strings.Compare(err.Error(), errorMessage) != 0 {
+		t.Fatalf("\nACTUAL: %s\nEXPECT: %s\n", err.Error(), errorMessage)
+	}
+}
+
 func TestGetMarketplaceProducts(t *testing.T) {
 	useCases := map[string]map[string]interface{}{
 		"uc1": {
@@ -103,9 +125,7 @@ func TestGetMarketplaceProducts(t *testing.T) {
 		proxy.EXPECT().GetShipInfo().Return([]byte(fmt.Sprintf("%v", uc["detailsResponse"])), nil)
 		proxy.EXPECT().
 			GetMarketplaceProducts(fmt.Sprintf("%v", uc["location"])).
-			Return(
-				[]byte(fmt.Sprintf("%v", uc["marketResponse"])),
-				nil)
+			Return([]byte(fmt.Sprintf("%v", uc["marketResponse"])), nil)
 		ship, err := component.NewShipCustomProxy(
 			context.TODO(),
 			trace.NewNoopTracerProvider().Tracer(""),
@@ -122,7 +142,7 @@ func TestGetMarketplaceProducts(t *testing.T) {
 		}
 
 		if !reflect.DeepEqual(actualMarketplace, uc["expectedMarketplace"].(*component.Marketplace)) {
-			t.Fatalf("\n%+v\n%+v\n", actualMarketplace, uc["expectedMarketplace"].(*component.Marketplace))
+			t.Fatalf("\nACTUAL: %+v\nEXPECT: %+v\n", actualMarketplace, uc["expectedMarketplace"].(*component.Marketplace))
 		}
 
 		if !reflect.DeepEqual(actualProducts, uc["expectedProducts"].(*map[string]component.Product)) {
@@ -528,6 +548,26 @@ func TestSell(t *testing.T) {
 				Ship: component.Ship{},
 				Error: component.Error{
 					Code:    0,
+					Message: ""}}},
+		"uc2": {
+			"id":                 "id0002",
+			"token":              "token0002",
+			"tracer":             trace.NewNoopTracerProvider().Tracer(""),
+			"good":               "Good0002",
+			"quantity":           3,
+			"detailsResponse":    "{\"ship\":{\"id\":\"id0002\",\"flightPlanId\":\"flightPlanId0002\",\"cargo\":[{\"good\":\"FUEL\",\"quantity\":41,\"totalVolume\":55}],\"spaceAvailable\":286,\"type\":\"GR-MK-II\",\"class\":\"MK-II\",\"maxCargo\":300,\"loadingSpeed\":500,\"speed\":1,\"manufacturer\":\"Gravager\",\"plating\":10,\"weapons\":5}}",
+			"flightPlanResponse": "{\"flightPlan\": {\"arrivesAt\": \"2022-06-13T19:44:24.963Z\",\"createdAt\": \"2022-06-13T19:44:23.003Z\",\"departure\": \"OE-PM-TR\",\"destination\": \"OE-PM\",\"distance\": 1,\"fuelConsumed\": 1,\"fuelRemaining\": 18,\"id\": \"flightplanid0001\",\"shipId\": \"id0002\",\"terminatedAt\": null,\"timeRemainingInSeconds\": 1}}",
+			"sellGoodResponse":   "{\"credits\": 456, \"order\": {\"good\": \"Good0002\",\"pricePerUnit\": 9,\"quantity\": 3,\"total\": 7}}",
+			"expectedSell": &component.Trade{
+				Credits: 456,
+				Order: component.TradeOrder{
+					Good:         "Good0002",
+					PricePerUnit: 9,
+					Quantity:     3,
+					Total:        7},
+				Ship: component.Ship{},
+				Error: component.Error{
+					Code:    0,
 					Message: ""}}}}
 
 	ctrl := gomock.NewController(t)
@@ -537,7 +577,7 @@ func TestSell(t *testing.T) {
 
 	for _, uc := range useCases {
 		proxy.EXPECT().GetShipInfo().Return([]byte(fmt.Sprintf("%v", uc["detailsResponse"])), nil)
-		proxy.EXPECT().GetShipInfo().Return([]byte(fmt.Sprintf("%v", uc["detailsResponse"])), nil)
+		// proxy.EXPECT().GetShipInfo().Return([]byte(fmt.Sprintf("%v", uc["detailsResponse"])), nil)
 		proxy.EXPECT().SellGood(fmt.Sprintf("%v", uc["good"]), uc["quantity"].(int)).
 			Return([]byte(fmt.Sprintf("%v", uc["sellGoodResponse"])), nil)
 		ship, err := component.NewShipCustomProxy(

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -95,10 +96,36 @@ func (wp *WebProxy) SellGood(good string, quantity int) ([]byte, error) {
 func (wp *WebProxy) get(uri string) ([]byte, error) {
 	count := 0
 	for count < maxRetriesTimeout {
+		log.Printf("Attempting request try %d/%d : %s ...", count, maxRetriesTimeout, uri)
+		count += 1
 		response, err := http.Get(uri)
 		if err == nil {
-			defer response.Body.Close()
-			return io.ReadAll(response.Body)
+			// for k, v := range response.Header {
+			// 	fmt.Printf("** HEADER: %s:\t%+v\n", k, v)
+			// }
+
+			switch response.StatusCode {
+			case http.StatusBadRequest, http.StatusTooManyRequests:
+				log.Printf("Too many requests... waiting %d s...", +3)
+				// Wait X + delay seconds and send the request again.
+				wait, err := time.ParseDuration(fmt.Sprintf("0%ss", response.Header.Get("Retry-After")))
+				if err != nil {
+					log.Printf("Error when parsing throttle wait time: %s", err.Error())
+					time.Sleep(1 * time.Minute)
+				} else {
+					log.Printf("Waiting throttle time limit...")
+					time.Sleep(wait)
+					time.Sleep(3 * time.Second)
+				}
+				continue
+			case http.StatusOK, http.StatusCreated:
+				defer response.Body.Close()
+				return io.ReadAll(response.Body)
+			default:
+				log.Printf("++ Statuscode: %d", response.StatusCode)
+				time.Sleep(5 * time.Second)
+				continue
+			}
 		}
 
 		errUrl := err.(*url.Error)
@@ -117,8 +144,31 @@ func (wp *WebProxy) post(uri string, data io.Reader) ([]byte, error) {
 	for count < maxRetriesTimeout {
 		response, err := http.Post(uri, "application/json", data)
 		if err == nil {
-			defer response.Body.Close()
-			return io.ReadAll(response.Body)
+			// for k, v := range response.Header {
+			// 	fmt.Printf("** HEADER: %s:\t%+v\n", k, v)
+			// }
+
+			switch response.StatusCode {
+			case http.StatusBadRequest, http.StatusTooManyRequests:
+				log.Printf("Too many requests... waiting %d s...", +3)
+				// Wait X + delay seconds and send the request again.
+				wait, err := time.ParseDuration(fmt.Sprintf("0%ss", response.Header.Get("Retry-After")))
+				if err != nil {
+					log.Printf("Error when parsing throttle wait time: %s", err.Error())
+					time.Sleep(1 * time.Minute)
+				} else {
+					log.Printf("Waiting throttle time limit...")
+					time.Sleep(wait)
+					time.Sleep(3 * time.Second)
+				}
+				continue
+			case http.StatusOK, http.StatusCreated:
+				defer response.Body.Close()
+				return io.ReadAll(response.Body)
+			default:
+				log.Printf("++ Statuscode: %d", response.StatusCode)
+				continue
+			}
 		}
 
 		errUrl := err.(*url.Error)
