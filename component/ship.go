@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/otaviokr/spacetraders-ship/kafka"
 	"github.com/otaviokr/spacetraders-ship/web"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -18,9 +19,9 @@ import (
 
 // Ship contains the essential information to authenticate in the game, but also to map the response from ship details.
 type Ship struct {
-	token    string
-	tracer   trace.Tracer
-	webProxy web.Proxy
+	tracer trace.Tracer
+	// webProxy web.Proxy
+	webProxy kafka.Proxy
 	Details  ShipDetails `yaml:"ship"`
 	Error    Error       `yaml:"error"`
 }
@@ -52,16 +53,31 @@ type ShipCargo struct {
 }
 
 // NewShip creates a new instance of component.Ship.
-func NewShip(ctx context.Context, tracer trace.Tracer, id, token string) (*Ship, error) {
-	return NewShipCustomProxy(ctx, tracer, web.NewWebProxy(id, token), id, token)
+// func NewShip(ctx context.Context, tracer trace.Tracer, id, token string) (*Ship, error) {
+func NewShip(
+	ctx context.Context, tracer trace.Tracer,
+	id, connectionType, connectionString,
+	topicRead string, partitionRead int,
+	topicWrite string, partitionWrite int) (*Ship, error) {
+	// return NewShipCustomProxy(ctx, tracer, web.NewWebProxy(id, token), id, token)
+	return NewShipCustomProxy(ctx, tracer,
+		kafka.NewKafkaProxy(
+			ctx,
+			connectionType,
+			connectionString,
+			topicRead,
+			partitionRead,
+			topicWrite,
+			partitionWrite),
+		id)
 }
 
 // NewShipCustomProxy creates a new instance of component.Ship, using a provided custom web.WebProxy.
-func NewShipCustomProxy(ctx context.Context, tracer trace.Tracer, proxy web.Proxy, id, token string) (*Ship, error) {
+// func NewShipCustomProxy(ctx context.Context, tracer trace.Tracer, proxy web.Proxy, id, token string) (*Ship, error) {
+func NewShipCustomProxy(ctx context.Context, tracer trace.Tracer, proxy kafka.Proxy, id string) (*Ship, error) {
 	shipCtx, span := tracer.Start(ctx, "Activate Ship")
 	defer span.End()
 	ship := Ship{
-		token:    token,
 		tracer:   tracer,
 		webProxy: proxy,
 		Details: ShipDetails{
@@ -83,11 +99,13 @@ func (s *Ship) GetDetails(ctx context.Context) error {
 			attribute.Key("ship.id").String(s.Details.Id)))
 	defer span.End()
 
+	log.Println("Getting ship details...")
 	data, err := s.webProxy.GetShipInfo()
 	if err != nil {
 		span.RecordError(err)
 		span.SetAttributes(attribute.Key("data").String(string(data)))
 		span.SetStatus(codes.Error, err.Error())
+		log.Println("could not get response:", err)
 		return err
 	} else {
 		s.Error.Code = -1
@@ -98,6 +116,7 @@ func (s *Ship) GetDetails(ctx context.Context) error {
 	if err = decoder.Decode(&s); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
+		log.Println("could not decode response:", err)
 		return err
 	}
 

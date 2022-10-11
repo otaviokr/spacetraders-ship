@@ -1,4 +1,4 @@
-package web
+package kafka
 
 type Proxy interface {
 	// GetShipInfo collects information about specific ship.
