@@ -63,6 +63,7 @@ func NewShip(
 	return NewShipCustomProxy(ctx, tracer,
 		kafka.NewKafkaProxy(
 			ctx,
+			id,
 			connectionType,
 			connectionString,
 			topicRead,

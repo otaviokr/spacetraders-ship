@@ -21,10 +21,11 @@ type KafkaDetails struct {
 }
 
 func NewKafkaProxy(
-	ctx context.Context, connectionType, hostname,
+	ctx context.Context, id, connectionType, hostname,
 	topicRead string, partitionRead int,
 	topicWrite string, partitionWrite int) Proxy {
 	return &KafkaProxy{
+		id: id,
 		Consumer: dialLeader(
 			context.WithValue(ctx, "kafkaproxy", "consumer"),
 			connectionType,
@@ -53,9 +54,9 @@ func dialLeader(ctx context.Context, connectionType, hostname, topic string, par
 	}
 }
 
-func (kp *KafkaProxy) Write(msg string) error {
+func (kp *KafkaProxy) Write(key, msg string) error {
 	kp.Producer.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	_, err := kp.Producer.conn.WriteMessages(kafka.Message{Value: []byte(msg)})
+	_, err := kp.Producer.conn.WriteMessages(kafka.Message{Key: []byte(key), Value: []byte(msg)})
 	// if err != nil {
 	// 	log.Fatal("failed to write messages:", err)
 	// }

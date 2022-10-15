@@ -12,17 +12,35 @@ services:
     ports:
       - "9091:9091"
     environment:
+      # USER_TOKEN is the secret token to authenticate in spacetraders API.
       - USER_TOKEN=a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6
+
+      # SHIP_ID is your ship identification in the API. If you have multiple ships,
+      # start multiple containers, just changing this value for each ship.
       - SHIP_ID=a1b2c3d435f6g7h8i9j0a1b2c3d
+
+      # CONFIG_FILE_PATH is the route instructions for your ship to perform.
       - CONFIG_FILE_PATH=route_example.yml
+
+      # You don't need to change these parameters, if you are using the "default" configuration.
       - JAEGER_URL=http://jaeger:14268/api/traces
       - METRICS_PORT=9091
+      - KAFKA_CONN_TYPE=tcp
+      - KAFKA_CONN_STRING=kafka:9092
+      - KAFKA_TOPIC_READ=spacetrader_response
+      - KAFKA_TOPIC_WRITE=spacetrader_order
+      - KAFKA_PARTITION_WRITE=0
+      - KAFKA_PARTITION_READ=0
+
     restart: unless-stopped
     volumes:
+      # PAY ATTENTION! The file name here must be the same as CONFIG_FILE_PATH.
       - ./etc/routes/route_example.yml:/app/route_example.yml:ro
     depends_on:
       - prometheus
       - jaeger
+      - zookeeper
+      - kafka
 
   prometheus:
     image: prom/prometheus:v2.36.1
@@ -32,7 +50,7 @@ services:
     ports:
       - '9090:9090'
     command:
-    - --config.file=/etc/prometheus/prometheus.yml
+      - --config.file=/etc/prometheus/prometheus.yml
     # logging:
     #   driver: loki
     #   options:
@@ -68,3 +86,36 @@ services:
       - "16686:16686"
     environment:
       - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+
+  zookeeper:
+    image: docker.io/bitnami/zookeeper:3.8
+    ports:
+      - "2181:2181"
+    volumes:
+      - "zookeeper_data:/bitnami"
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+
+  kafka:
+    image: docker.io/bitnami/kafka:3.2
+    ports:
+      - "29092:29092"
+    volumes:
+      - "kafka_data:/bitnami"
+    environment:
+      KAFKA_CFG_ZOOKEEPER_CONNECT: zookeeper:2181
+      ALLOW_PLAINTEXT_LISTENER: yes
+      KAFKA_CREATE_TOPICS: my_test:1
+      KAFKA_LISTENERS: EXTERNAL_SAME_HOST://:29092,INTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL_SAME_HOST://localhost:29092
+      # KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL_SAME_HOST://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL_SAME_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+    depends_on:
+      - zookeeper
+
+volumes:
+  zookeeper_data:
+    driver: local
+  kafka_data:
+    driver: local

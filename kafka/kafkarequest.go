@@ -21,7 +21,7 @@ const (
 func (kp *KafkaProxy) GetShipInfo() ([]byte, error) {
 	// return wp.get(fmt.Sprintf(httpEndpointGetShipDetails, wp.id, wp.token))
 	msg := []byte{}
-	err := kp.Write(fmt.Sprintf("{\"id\": \"%s\", \"action\": \"%s\"}", kp.id, httpEndpointGetShipDetails))
+	err := kp.Write(kp.id, fmt.Sprintf("{\"id\": \"%s\", \"action\": \"%s\"}", kp.id, httpEndpointGetShipDetails))
 	if err != nil {
 		log.Println("Error sending request to kafka:", err)
 		return msg, err
@@ -32,6 +32,7 @@ func (kp *KafkaProxy) GetShipInfo() ([]byte, error) {
 		time.Sleep(1 * time.Second)
 		msg = kp.Read()
 	}
+	log.Printf("GetShipInfo: received msg : %s\n", string(msg))
 
 	return msg, nil
 }
@@ -41,7 +42,7 @@ func (kp *KafkaProxy) GetShipInfo() ([]byte, error) {
 // https://api.spacetraders.io/#api-locations-GetMarketplace
 func (kp *KafkaProxy) GetMarketplaceProducts(location string) ([]byte, error) {
 	// return wp.get(fmt.Sprintf(httpEndpointGetMarketplaceInfo, location, wp.token))
-	kp.Write(fmt.Sprintf("{\"action\": \"%s\", \"id\": \"%s\"}", httpEndpointGetMarketplaceInfo, kp.id))
+	kp.Write(kp.id, fmt.Sprintf("{\"action\": \"%s\", \"id\": \"%s\", \"location\": \"%s\"}", httpEndpointGetMarketplaceInfo, kp.id, location))
 
 	msg := []byte{}
 	for len(msg) < 1 {
@@ -60,7 +61,7 @@ func (kp *KafkaProxy) SetNewFlightPlan(destination string) ([]byte, error) {
 	// 	fmt.Sprintf(httpEndpointPostFlightPlanNew, wp.token),
 	// 	bytes.NewReader(
 	// 		[]byte(fmt.Sprintf("{\"shipId\": \"%s\", \"destination\": \"%s\"}", wp.id, destination))))
-	kp.Write(fmt.Sprintf("{\"action\": \"%s\",\"shipId\": \"%s\",\"destination\":\"%s\"}", httpEndpointPostFlightPlanNew, kp.id, destination))
+	kp.Write(kp.id, fmt.Sprintf("{\"action\": \"%s\",\"shipId\": \"%s\",\"destination\":\"%s\"}", httpEndpointPostFlightPlanNew, kp.id, destination))
 
 	msg := []byte{}
 	for len(msg) < 1 {
@@ -76,7 +77,7 @@ func (kp *KafkaProxy) SetNewFlightPlan(destination string) ([]byte, error) {
 // https://api.spacetraders.io/#api-flight_plans-GetFlightPlan
 func (kp *KafkaProxy) GetFlightPlan(planId string) ([]byte, error) {
 	// return wp.get(fmt.Sprintf(httpEndpointGetFlightPlanDetails, planId, wp.token))
-	kp.Write(fmt.Sprintf("{\"action\": \"%s\",\"planId\": \"%s\"}", httpEndpointGetFlightPlanDetails, planId))
+	kp.Write(kp.id, fmt.Sprintf("{\"action\": \"%s\",\"planId\": \"%s\"}", httpEndpointGetFlightPlanDetails, planId))
 
 	msg := []byte{}
 	for len(msg) < 1 {
@@ -96,7 +97,7 @@ func (kp *KafkaProxy) BuyGood(good string, quantity int) ([]byte, error) {
 	// 	bytes.NewReader(
 	// 		[]byte(
 	// 			fmt.Sprintf("{\"shipId\": \"%s\", \"good\": \"%s\", \"quantity\": %d}", wp.id, good, quantity))))
-	kp.Write(fmt.Sprintf(
+	kp.Write(kp.id, fmt.Sprintf(
 		"{\"action\": \"%s\",\"shipId\": \"%s\",\"good\": \"%s\",\"quantity\": %d}",
 		httpEndpointPostBuyOrderNew, kp.id, good, quantity))
 
@@ -118,7 +119,7 @@ func (kp *KafkaProxy) SellGood(good string, quantity int) ([]byte, error) {
 	// 	bytes.NewReader(
 	// 		[]byte(
 	// 			fmt.Sprintf("{\"shipId\": \"%s\", \"good\": \"%s\", \"quantity\": %d}", wp.id, good, quantity))))
-	kp.Write(fmt.Sprintf(
+	kp.Write(kp.id, fmt.Sprintf(
 		"{\"action\": \"%s\",\"shipId\": \"%s\",\"good\": \"%s\",\"quantity\": %d}",
 		httpEndpointPostSellOrderNew, kp.id, good, quantity))
 
