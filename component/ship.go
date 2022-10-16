@@ -3,14 +3,13 @@ package component
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/otaviokr/spacetraders-ship/kafka"
 	"github.com/otaviokr/spacetraders-ship/web"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -20,9 +19,9 @@ import (
 
 // Ship contains the essential information to authenticate in the game, but also to map the response from ship details.
 type Ship struct {
-	token    string
-	tracer   trace.Tracer
-	webProxy web.Proxy
+	tracer trace.Tracer
+	// webProxy web.Proxy
+	webProxy kafka.Proxy
 	Details  ShipDetails `yaml:"ship"`
 	Error    Error       `yaml:"error"`
 }
@@ -54,16 +53,32 @@ type ShipCargo struct {
 }
 
 // NewShip creates a new instance of component.Ship.
-func NewShip(ctx context.Context, tracer trace.Tracer, id, token string) (*Ship, error) {
-	return NewShipCustomProxy(ctx, tracer, web.NewWebProxy(id, token), id, token)
+// func NewShip(ctx context.Context, tracer trace.Tracer, id, token string) (*Ship, error) {
+func NewShip(
+	ctx context.Context, tracer trace.Tracer,
+	id, connectionType, connectionString,
+	topicRead string, partitionRead int,
+	topicWrite string, partitionWrite int) (*Ship, error) {
+	// return NewShipCustomProxy(ctx, tracer, web.NewWebProxy(id, token), id, token)
+	return NewShipCustomProxy(ctx, tracer,
+		kafka.NewKafkaProxy(
+			ctx,
+			id,
+			connectionType,
+			connectionString,
+			topicRead,
+			partitionRead,
+			topicWrite,
+			partitionWrite),
+		id)
 }
 
 // NewShipCustomProxy creates a new instance of component.Ship, using a provided custom web.WebProxy.
-func NewShipCustomProxy(ctx context.Context, tracer trace.Tracer, proxy web.Proxy, id, token string) (*Ship, error) {
+// func NewShipCustomProxy(ctx context.Context, tracer trace.Tracer, proxy web.Proxy, id, token string) (*Ship, error) {
+func NewShipCustomProxy(ctx context.Context, tracer trace.Tracer, proxy kafka.Proxy, id string) (*Ship, error) {
 	shipCtx, span := tracer.Start(ctx, "Activate Ship")
 	defer span.End()
 	ship := Ship{
-		token:    token,
 		tracer:   tracer,
 		webProxy: proxy,
 		Details: ShipDetails{
@@ -85,11 +100,13 @@ func (s *Ship) GetDetails(ctx context.Context) error {
 			attribute.Key("ship.id").String(s.Details.Id)))
 	defer span.End()
 
+	log.Println("Getting ship details...")
 	data, err := s.webProxy.GetShipInfo()
 	if err != nil {
 		span.RecordError(err)
 		span.SetAttributes(attribute.Key("data").String(string(data)))
 		span.SetStatus(codes.Error, err.Error())
+		log.Println("could not get response:", err)
 		return err
 	} else {
 		s.Error.Code = -1
@@ -100,6 +117,7 @@ func (s *Ship) GetDetails(ctx context.Context) error {
 	if err = decoder.Decode(&s); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
+		log.Println("could not decode response:", err)
 		return err
 	}
 
@@ -112,52 +130,6 @@ func (s *Ship) GetDetails(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// GetMarketplaceProducts will fetch the products that are available to be traded in the current marketplace.
-func (s *Ship) GetMarketplaceProducts(ctx context.Context) (*Marketplace, *map[string]Product, error) {
-	newCtx, span := s.tracer.Start(
-		ctx,
-		"Get Products from Marketplace",
-		trace.WithAttributes(
-			attribute.Key("ship.id").String(s.Details.Id),
-			attribute.Key("location").String(s.Details.Location)))
-	defer span.End()
-
-	err := s.GetDetails(newCtx)
-	if err != nil {
-		span.RecordError(err)
-	}
-
-	data, err := s.webProxy.GetMarketplaceProducts(s.Details.Location)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return nil, nil, err
-	}
-
-	var m Marketplace
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	if err = decoder.Decode(&m); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return nil, nil, err
-	}
-
-	if len(m.Error.Message) > 0 {
-		// Error from the server, we should still report it.
-		err = fmt.Errorf("ERROR FROM SERVER (%d): %s", s.Error.Code, s.Error.Message)
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return nil, nil, err
-	}
-
-	p := map[string]Product{}
-	for _, product := range m.Products {
-		p[product.Symbol] = product
-	}
-
-	return &m, &p, nil
 }
 
 // Fly will set the FlightPlan to a new destination, and wait until the flight is finished before returning from the method.
@@ -231,126 +203,6 @@ func (s *Ship) Fly(ctx context.Context, destination string) error {
 	return nil
 }
 
-// DoCommerce places the buy and sell orders to the game.
-func (s *Ship) DoCommerce(ctx context.Context, sell, buy map[string]int) error {
-	newCtx, span := s.tracer.Start(ctx, "Commerce")
-	defer span.End()
-
-	_, products, err := s.GetMarketplaceProducts(newCtx)
-	if err != nil {
-		span.RecordError(err)
-	}
-
-	for _, good := range s.Details.Cargo {
-		if _, ok := (*products)[good.Good]; ok {
-			if sell[good.Good] == -1 {
-				log.Printf("Selling the whole lot of %s: %d", good.Good, good.Quantity)
-				sell[good.Good] = good.Quantity
-			} else {
-				log.Printf("Selling pre-defined lot of %s: %d", good.Good, sell[good.Good])
-			}
-		}
-	}
-
-	err = s.SellAll(newCtx, sell, *products)
-	if err != nil {
-		span.RecordError(err)
-	}
-
-	err = s.GetDetails(newCtx)
-	if err != nil {
-		span.RecordError(err)
-	}
-
-	for _, good := range s.Details.Cargo {
-		if _, ok := (*products)[good.Good]; ok {
-			if _, ok := buy[good.Good]; ok {
-				log.Printf(
-					"Buying necessary to complete lot of %s: %d (total %d)",
-					good.Good, buy[good.Good]-good.Quantity, buy[good.Good])
-				buy[good.Good] -= good.Quantity
-			}
-		}
-	}
-
-	err = s.BuyAll(newCtx, buy, *products)
-	if err != nil {
-		span.RecordError(err)
-	}
-
-	return nil
-}
-
-// SellAll is wrapper to sell all units of products in the provided list.
-func (s *Ship) SellAll(ctx context.Context, sell map[string]int, marketplace map[string]Product) error {
-	sellCtx, sellSpan := s.tracer.Start(
-		ctx,
-		"Sell goods",
-		trace.WithAttributes(
-			attribute.Key("Goods to sell").Int(len(sell))))
-	defer sellSpan.End()
-
-	for good, quantity := range sell {
-		if _, ok := marketplace[good]; ok {
-			log.Printf("Selling lot of %s: %d\n", good, quantity)
-
-			_, err := s.Sell(sellCtx, good, quantity)
-			if err != nil {
-				sellSpan.RecordError(err)
-			}
-		} else {
-			sellSpan.AddEvent(
-				"Cannot sell product",
-				trace.WithAttributes(
-					attribute.Key("product").String(good)))
-		}
-	}
-	return nil
-}
-
-// BuyAll is wrapper to buy the products in the provided list.
-func (s *Ship) BuyAll(ctx context.Context, buy map[string]int, marketplace map[string]Product) error {
-	buyCtx, buySpan := s.tracer.Start(
-		ctx,
-		"Buy goods",
-		trace.WithAttributes(
-			attribute.Key("Goods to buy").Int(len(buy))))
-	defer buySpan.End()
-
-	for good, quantity := range buy {
-		if _, ok := marketplace[good]; ok {
-			if good == "FUEL" {
-				log.Printf("Priority purchase of %s: %d\n", good, quantity)
-				err := s.ForceBuyFuel(ctx, quantity)
-				if err != nil {
-					buySpan.RecordError(err)
-				}
-			} else {
-				log.Printf("Buying lot of %s: %d\n", good, quantity)
-				actualQuantity := quantity
-				if s.Details.SpaceAvailable < quantity*marketplace[good].VolumePerUnit {
-					actualQuantity = int(s.Details.SpaceAvailable / marketplace[good].VolumePerUnit)
-					log.Printf("Low cargo space! Available: %d / Wanted: %d (Volume Per Unit: %d)\n", s.Details.SpaceAvailable, actualQuantity, marketplace[good].VolumePerUnit)
-				} else {
-					for _, product := range s.Details.Cargo {
-						if product.Good == good {
-							actualQuantity = quantity - product.Quantity
-							log.Printf("Completing lot of %s: Original(%d) / Additional(%d)\n", good, product.Quantity, actualQuantity)
-						}
-					}
-				}
-
-				// FIXME
-				_, err := s.Buy(buyCtx, good, actualQuantity)
-				if err != nil {
-					buySpan.RecordError(err)
-				}
-			}
-		}
-	}
-	return nil
-}
-
 // NewFlightPlan sets a new destination for the ship to fly to.
 func (s *Ship) NewFlightPlan(ctx context.Context, destination string) (*FlightPlan, error) {
 	newCtx, span := s.tracer.Start(
@@ -378,23 +230,29 @@ func (s *Ship) NewFlightPlan(ctx context.Context, destination string) (*FlightPl
 	if fp.Error.Code > 0 {
 		re := regexp.MustCompile(InsufficientFuelRegex)
 		found := re.FindAllStringSubmatch(fp.Error.Message, 1)
-		fuel, err := strconv.Atoi(found[0][1])
-		if err != nil {
+		if found == nil {
+			err = fmt.Errorf("UNEXPECTED ERROR (%d): %s", fp.Error.Code, fp.Error.Message)
+			log.Println(err.Error())
 			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			return nil, err
-		}
+		} else {
+			fuel, err := strconv.Atoi(found[0][1])
+			if err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				return nil, err
+			}
 
-		// Error from the server, we should still report it.
-		err = fmt.Errorf("ERROR FROM SERVER (%d): %s", fp.Error.Code, fp.Error.Message)
-		span.RecordError(err)
-		// span.SetStatus(codes.Error, err.Error())
-
-		err = s.ForceBuyFuel(newCtx, fuel)
-		if err != nil {
+			// Error from the server, we should still report it.
+			err = fmt.Errorf("ERROR FROM SERVER (%d): %s", fp.Error.Code, fp.Error.Message)
 			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			return nil, err
+			// span.SetStatus(codes.Error, err.Error())
+
+			err = s.ForceBuyFuel(newCtx, fuel)
+			if err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				return nil, err
+			}
 		}
 
 		return s.NewFlightPlan(newCtx, destination)
@@ -433,148 +291,4 @@ func (s *Ship) GetFlightPlan(ctx context.Context) (*FlightPlan, error) {
 	}
 
 	return &fp, nil
-}
-
-// Sell sends a sell order to the game.
-func (s *Ship) Sell(ctx context.Context, good string, quantity int) (*Trade, error) {
-	return s.trade(ctx, "sell", good, quantity)
-}
-
-// Buy sends a buy order to the game.
-func (s *Ship) Buy(ctx context.Context, good string, quantity int) (*Trade, error) {
-	return s.trade(ctx, "buy", good, quantity)
-}
-
-// ForceBuyFuel will prioritize the purchase of fuel, selling goods if necessary.
-func (s *Ship) ForceBuyFuel(ctx context.Context, fuel int) error {
-	newCtx, span := s.tracer.Start(
-		ctx,
-		"Buy emergency fuel",
-		trace.WithAttributes(
-			attribute.Key("Extra fuel required").Int(fuel)))
-	defer span.End()
-
-	if s.Details.SpaceAvailable > fuel {
-		if _, err := s.Buy(newCtx, "FUEL", fuel); err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			return err
-		}
-
-		return nil
-	}
-
-	_, products, err := s.GetMarketplaceProducts(newCtx)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return err
-	}
-
-	log.Printf("Priority purchase of %s issued: %d\n", "FUEL", fuel)
-
-	if s.Details.SpaceAvailable > fuel {
-		log.Printf("Enough space in cargo bay. Buying fuel...")
-		if _, err = s.Buy(newCtx, "FUEL", fuel); err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			return err
-		}
-		return nil
-	}
-
-	log.Printf("Not enough free room in cargo bay. Selling other goods to make room: %d", fuel)
-	remaining := fuel
-	for _, cargo := range s.Details.Cargo {
-		if _, ok := (*products)[cargo.Good]; ok {
-			log.Printf("Selling %v: max room to free (%d), need(%d)\n", cargo.Good, cargo.TotalVolume, remaining)
-			if cargo.TotalVolume > remaining {
-				if _, err = s.Sell(newCtx, cargo.Good, remaining/(*products)[cargo.Good].VolumePerUnit); err != nil {
-					span.RecordError(err)
-					span.SetStatus(codes.Error, err.Error())
-					return err
-				}
-
-				if _, err = s.Buy(newCtx, "FUEL", fuel); err != nil {
-					span.RecordError(err)
-					span.SetStatus(codes.Error, err.Error())
-					return err
-				}
-
-				log.Println("Ship is re-fueled.")
-				return nil
-			}
-
-			if _, err = s.Sell(newCtx, cargo.Good, cargo.Quantity); err != nil {
-				span.RecordError(err)
-				span.SetStatus(codes.Error, err.Error())
-				return err
-			}
-			remaining -= cargo.Quantity
-		}
-	}
-	log.Println("ALERT! Not enough room to fuel!")
-	return fmt.Errorf("could not purchase fuel - impossible to sell products at location?")
-}
-
-// trade is generic call to buy and sell products in game.
-func (s *Ship) trade(ctx context.Context, action, good string, quantity int) (*Trade, error) {
-	_, span := s.tracer.Start(
-		ctx,
-		"Trade goods",
-		trace.WithAttributes(
-			attribute.Key("action").String(action),
-			attribute.Key("good").String(good),
-			attribute.Key("quantity").Int(quantity)))
-	defer span.End()
-
-	var data []byte
-	var err error
-	switch strings.ToLower(action) {
-	case "sell":
-		data, err = s.webProxy.SellGood(good, quantity)
-	case "buy":
-		data, err = s.webProxy.BuyGood(good, quantity)
-	}
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return nil, err
-	}
-
-	var operation Trade
-	decoder := yaml.NewDecoder((bytes.NewReader(data)))
-	if err = decoder.Decode(&operation); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return nil, err
-	}
-
-	if len(operation.Error.Message) > 0 {
-		// Error from the server, we should still report it.
-		err = fmt.Errorf("ERROR FROM SERVER (%d): %s", operation.Error.Code, operation.Error.Message)
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return nil, err
-	}
-
-	switch strings.ToLower(action) {
-	case "sell":
-		web.MoneyEarned.
-			WithLabelValues(s.Details.Id, operation.Order.Good).
-			Add(float64(operation.Order.Total))
-		web.GoodsSold.
-			WithLabelValues(s.Details.Id, operation.Order.Good, operation.Ship.Details.Location).
-			Add(float64(operation.Order.Quantity))
-	case "buy":
-		web.MoneySpent.
-			WithLabelValues(s.Details.Id, operation.Order.Good).
-			Add(float64(operation.Order.Total))
-		web.GoodsBought.
-			WithLabelValues(s.Details.Id, operation.Order.Good, operation.Ship.Details.Location).
-			Add(float64(operation.Order.Quantity))
-	}
-	// web.UserCredits.Set(float64(operation.Credits))
-
-	return &operation, nil
 }

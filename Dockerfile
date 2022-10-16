@@ -2,6 +2,7 @@ FROM golang:alpine as builder
 
 WORKDIR $GOPATH/src/github.com/otaviokr/spacetraders-ship/
 COPY component/ component/
+COPY kafka/ kafka/
 COPY web/ web/
 COPY go.mod go.mod
 COPY go.sum go.sum

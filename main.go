@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/otaviokr/spacetraders-ship/component"
@@ -37,6 +38,33 @@ func main() {
 	filePath := os.Getenv("CONFIG_FILE_PATH")
 	jaegerUrl := os.Getenv("JAEGER_URL")
 
+	kafkaConnType := os.Getenv("KAFKA_CONN_TYPE")
+	kafkaConnString := os.Getenv("KAFKA_CONN_STRING")
+	kafkaTopicRead := os.Getenv("KAFKA_TOPIC_READ")
+	kafkaTopicWrite := os.Getenv("KAFKA_TOPIC_WRITE")
+	kafkaPartitionRead := 0
+	kafkaPartitionWrite := 0
+
+	tempPartition := os.Getenv("KAFKA_PARTITION_READ")
+	if len(tempPartition) > 0 {
+		var err error
+		kafkaPartitionRead, err = strconv.Atoi(tempPartition)
+		if err != nil {
+			log.Println("Error while processing Kafka Read Partition:", err)
+			kafkaPartitionRead = 0
+		}
+	}
+
+	tempPartition = os.Getenv("KAFKA_PARTITION_WRITE")
+	if len(tempPartition) > 0 {
+		var err error
+		kafkaPartitionWrite, err = strconv.Atoi(tempPartition)
+		if err != nil {
+			log.Println("Error while processing Kafka Write Partition:", err)
+			kafkaPartitionWrite = 0
+		}
+	}
+
 	metricsPort := os.Getenv("METRICS_PORT")
 	if len(metricsPort) < 1 {
 		metricsPort = "9090"
@@ -46,7 +74,11 @@ func main() {
 	go exposeMetrics(metricsPort)
 
 	// The main loop is actually inside the run function.
-	if err := run(token, shipId, filePath, jaegerUrl); err != nil {
+	if err := run(
+		token, shipId, filePath, jaegerUrl,
+		kafkaConnType, kafkaConnString,
+		kafkaTopicRead, kafkaPartitionRead,
+		kafkaTopicWrite, kafkaPartitionWrite); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err)
 		os.Exit(1)
 	}
@@ -54,13 +86,17 @@ func main() {
 
 // run contains the main loop of the program. It will collect data from the Space Traders game and
 // expose them to Prometheus.
-func run(token, shipId, configFilePath, jaegerUrl string) error {
+func run(token, shipId, configFilePath, jaegerUrl,
+	kafkaConnType, kafkaConnString, kafkaTopicRead string, kafkaPartitionRead int,
+	kafkaTopicWrite string, kafkaPartitionWrite int) error {
+	log.Println("Instantiating Jaeger...")
 	bgCtx := context.Background()
 	exp, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(jaegerUrl)))
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	log.Println("Creating new Tracer Provider...")
 	tp := traceSdk.NewTracerProvider(
 		traceSdk.WithBatcher(exp),
 		traceSdk.WithResource(newResource()))
@@ -69,18 +105,24 @@ func run(token, shipId, configFilePath, jaegerUrl string) error {
 			log.Fatal(err)
 		}
 	}()
-
 	otel.SetTracerProvider(tp)
 	tracer := otel.Tracer(TracerName)
 
 	// Defining the ship we will use.
-	ship, err := component.NewShip(bgCtx, tracer, shipId, token)
+	log.Printf("Defining ship: %s ...", shipId)
+	// ship, err := component.NewShip(bgCtx, tracer, shipId, token)
+	ship, err := component.NewShip(
+		bgCtx, tracer, shipId,
+		kafkaConnType, kafkaConnString,
+		kafkaTopicRead, kafkaPartitionRead,
+		kafkaTopicWrite, kafkaPartitionWrite)
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("Registered new ship wth ID %s\n", shipId)
 
 	if len(ship.Details.FlightPlanId) > 0 {
+		log.Println("Flight Plan already defined, checking details...")
 		flightPlan, err := ship.GetFlightPlan(bgCtx)
 		if err != nil {
 			log.Fatal(err)
@@ -98,6 +140,7 @@ func run(token, shipId, configFilePath, jaegerUrl string) error {
 	// FIXME we need to catch Ctrl+C and other termination commands to do a clean stop!
 	for {
 		// Read the trading route from file.
+		log.Println("Reading route file...")
 		routes, err := component.ReadRouteFile(configFilePath)
 		if err != nil {
 			log.Fatal(err)
